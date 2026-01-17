@@ -2,6 +2,25 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.5.0] - 2025-01-17
+
+### Added
+- Field projection support: `expr[[field1], [field2]]`
+- Optional access suffix `?` for field access, item access, and field projections
+- Space-separated identifiers in type field names: `type table [Date accessed = datetimezone]`
+- Type-less fields in table/record types: `type table [key, bar]`
+- Dot token support for single `.`
+
+### Changed
+- Improved `as`/`is` operator handling to parse type annotations correctly
+- `as nullable number` now formats without extra `type` keyword
+- Multiple field projection now uses `FieldProjectionExpr` AST node
+
+### Fixed
+- Fixed parsing of nullable types after `as` operator
+- Fixed field name parsing to stop at type keywords
+- Fixed optional suffix parsing for standalone field selectors like `[x]?`
+
 ## [0.4.0] - 2025-01-17
 
 ### Added

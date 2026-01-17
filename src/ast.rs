@@ -84,6 +84,9 @@ pub enum ExprKind {
     // Field access: record[field]
     FieldAccess(Box<FieldAccessExpr>),
     
+    // Field projection: record[[field1], [field2], ...]
+    FieldProjection(Box<FieldProjectionExpr>),
+    
     // Item access: list{index}
     ItemAccess(Box<ItemAccessExpr>),
     
@@ -246,18 +249,28 @@ pub struct ListExpr {
     pub items: Vec<Expr>,
 }
 
-/// Field access expression: expr[field]
+/// Field access expression: expr[field] or expr[field]?
 #[derive(Debug, Clone)]
 pub struct FieldAccessExpr {
     pub expr: Expr,
     pub field: Identifier,
+    pub optional: bool,
 }
 
-/// Item access expression: expr{index}
+/// Field projection expression: expr[[field1], [field2], ...] or expr[[field1], [field2], ...]?
+#[derive(Debug, Clone)]
+pub struct FieldProjectionExpr {
+    pub expr: Expr,
+    pub fields: Vec<Identifier>,
+    pub optional: bool,
+}
+
+/// Item access expression: expr{index} or expr{index}?
 #[derive(Debug, Clone)]
 pub struct ItemAccessExpr {
     pub expr: Expr,
     pub index: Expr,
+    pub optional: bool,
 }
 
 /// Binary expression

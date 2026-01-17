@@ -106,6 +106,7 @@ pub enum TokenKind {
     GreaterThanEqual,// >=
     FatArrow,        // =>
     QuestionQuestion,// ??
+    Dot,             // .
     DotDot,          // ..
     DotDotDot,       // ...
     
@@ -272,6 +273,7 @@ impl fmt::Display for TokenKind {
             TokenKind::GreaterThanEqual => write!(f, ">="),
             TokenKind::FatArrow => write!(f, "=>"),
             TokenKind::QuestionQuestion => write!(f, "??"),
+            TokenKind::Dot => write!(f, "."),
             TokenKind::DotDot => write!(f, ".."),
             TokenKind::DotDotDot => write!(f, "..."),
             TokenKind::Comma => write!(f, ","),

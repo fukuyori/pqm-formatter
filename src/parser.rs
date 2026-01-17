@@ -109,7 +109,20 @@ impl Parser {
             self.advance(); // consume operator
             self.skip_trivia();
             
-            let right = self.parse_binary_expression(prec + 1)?;
+            // For 'as' and 'is', parse type annotation instead of expression
+            let right = if op == BinaryOp::As || op == BinaryOp::Is {
+                let type_ann = self.parse_type_annotation()?;
+                // Convert TypeAnnotation to TypeExpr
+                let span = type_ann.span;
+                Expr::new(
+                    ExprKind::Type(Box::new(TypeExpr {
+                        type_annotation: type_ann,
+                    })),
+                    span,
+                )
+            } else {
+                self.parse_binary_expression(prec + 1)?
+            };
             
             let span = left.span.merge(right.span);
             left = Expr::new(
@@ -174,7 +187,7 @@ impl Parser {
         }
     }
     
-    /// Parse postfix expression (field access, item access, function call)
+    /// Parse postfix expression (field access, item access, function call, field projection)
     fn parse_postfix_expression(&mut self) -> Result<Expr, Vec<ParseError>> {
         let mut expr = self.parse_primary_expression()?;
         
@@ -182,20 +195,34 @@ impl Parser {
             self.skip_whitespace_only();  // Don't consume comments here
             match self.current_kind() {
                 TokenKind::LeftBracket => {
-                    self.advance();
-                    self.skip_trivia();
-                    
-                    // Field access
-                    let field = self.parse_identifier()?;
-                    
-                    self.skip_trivia();
-                    self.expect(TokenKind::RightBracket)?;
-                    
-                    let span = expr.span.merge(self.prev_span());
-                    expr = Expr::new(
-                        ExprKind::FieldAccess(Box::new(FieldAccessExpr { expr, field })),
-                        span,
-                    );
+                    // Check if this is field projection [[field1], [field2]]
+                    if self.peek_next_is(TokenKind::LeftBracket) {
+                        expr = self.parse_field_projection_postfix(expr)?;
+                    } else {
+                        // Regular field access [field]
+                        self.advance();
+                        self.skip_trivia();
+                        
+                        let field = self.parse_identifier()?;
+                        
+                        self.skip_trivia();
+                        self.expect(TokenKind::RightBracket)?;
+                        
+                        // Check for optional suffix ?
+                        self.skip_whitespace_only();
+                        let optional = if self.current_kind() == TokenKind::Question {
+                            self.advance();
+                            true
+                        } else {
+                            false
+                        };
+                        
+                        let span = expr.span.merge(self.prev_span());
+                        expr = Expr::new(
+                            ExprKind::FieldAccess(Box::new(FieldAccessExpr { expr, field, optional })),
+                            span,
+                        );
+                    }
                 }
                 TokenKind::LeftBrace => {
                     self.advance();
@@ -207,9 +234,18 @@ impl Parser {
                     self.skip_trivia();
                     self.expect(TokenKind::RightBrace)?;
                     
+                    // Check for optional suffix ?
+                    self.skip_whitespace_only();
+                    let optional = if self.current_kind() == TokenKind::Question {
+                        self.advance();
+                        true
+                    } else {
+                        false
+                    };
+                    
                     let span = expr.span.merge(self.prev_span());
                     expr = Expr::new(
-                        ExprKind::ItemAccess(Box::new(ItemAccessExpr { expr, index })),
+                        ExprKind::ItemAccess(Box::new(ItemAccessExpr { expr, index, optional })),
                         span,
                     );
                 }
@@ -237,6 +273,65 @@ impl Parser {
         }
         
         Ok(expr)
+    }
+    
+    /// Parse field projection postfix: [[field1], [field2], ...]
+    fn parse_field_projection_postfix(&mut self, base_expr: Expr) -> Result<Expr, Vec<ParseError>> {
+        self.advance(); // consume first '['
+        self.skip_trivia();
+        
+        let mut fields = Vec::new();
+        
+        while self.current_kind() == TokenKind::LeftBracket {
+            self.advance(); // consume '['
+            self.skip_trivia();
+            
+            let field = self.parse_identifier()?;
+            fields.push(field);
+            
+            self.skip_trivia();
+            self.expect(TokenKind::RightBracket)?;
+            
+            self.skip_trivia();
+            if self.current_kind() == TokenKind::Comma {
+                self.advance();
+                self.skip_trivia();
+            } else {
+                break;
+            }
+        }
+        
+        self.skip_trivia();
+        self.expect(TokenKind::RightBracket)?;
+        
+        // Check for optional suffix ?
+        self.skip_whitespace_only();
+        let optional = if self.current_kind() == TokenKind::Question {
+            self.advance();
+            true
+        } else {
+            false
+        };
+        
+        let span = base_expr.span.merge(self.prev_span());
+        Ok(Expr::new(
+            ExprKind::FieldProjection(Box::new(FieldProjectionExpr {
+                expr: base_expr,
+                fields,
+                optional,
+            })),
+            span,
+        ))
+    }
+    
+    /// Check if next non-whitespace token matches
+    fn peek_next_is(&mut self, kind: TokenKind) -> bool {
+        let saved_pos = self.pos;
+        self.advance();
+        self.skip_trivia();
+        let result = std::mem::discriminant(&self.current_kind()) == std::mem::discriminant(&kind);
+        self.pos = saved_pos;
+        result
     }
     
     /// Parse primary expression
@@ -794,6 +889,8 @@ impl Parser {
     }
     
     /// Parse type field list: [Field1 = type, Field2 = type, ...]
+    /// Also supports fields without type: [Field1, Field2]
+    /// Also supports space-separated identifiers: [Date accessed = datetimezone]
     fn parse_type_field_list(&mut self) -> Result<Vec<FieldType>, Vec<ParseError>> {
         self.advance(); // consume '['
         self.skip_trivia();
@@ -816,15 +913,23 @@ impl Parser {
                 false
             };
             
-            // Field name
-            let name = self.parse_identifier()?;
+            // Field name - may include spaces (e.g., "Date accessed")
+            let name = self.parse_type_field_name()?;
             
             self.skip_trivia();
-            self.expect(TokenKind::Equal)?;
-            self.skip_trivia();
             
-            // Field type
-            let type_annotation = self.parse_type_annotation()?;
+            // Check if there's a type annotation
+            let type_annotation = if self.current_kind() == TokenKind::Equal {
+                self.advance();
+                self.skip_trivia();
+                self.parse_type_annotation()?
+            } else {
+                // No type - use Any as default
+                TypeAnnotation {
+                    kind: TypeKind::Any,
+                    span: name.span,
+                }
+            };
             
             fields.push(FieldType {
                 name,
@@ -846,6 +951,70 @@ impl Parser {
         self.expect(TokenKind::RightBracket)?;
         
         Ok(fields)
+    }
+    
+    /// Parse type field name (may include spaces, e.g., "Date accessed")
+    /// Collects all identifiers until we hit = or , or ]
+    fn parse_type_field_name(&mut self) -> Result<Identifier, Vec<ParseError>> {
+        let start_span = self.current_span();
+        let mut name_parts = Vec::new();
+        
+        // First part must be an identifier
+        match self.current_kind() {
+            TokenKind::Identifier(ref s) => {
+                name_parts.push(s.clone());
+                self.advance();
+            }
+            TokenKind::QuotedIdentifier(ref s) => {
+                // Quoted identifier - return as is
+                let name = s.clone();
+                self.advance();
+                return Ok(Identifier::new(name, true, start_span.merge(self.prev_span())));
+            }
+            _ => {
+                let msg = format!("Expected identifier, found {:?}", self.current_kind());
+                self.errors.push(ParseError::new(&msg, start_span));
+                return Err(self.errors.clone());
+            }
+        }
+        
+        // Continue collecting words until we hit = or , or ]
+        // The tricky part is: "Date accessed = datetimezone" should give us "Date accessed"
+        // We look ahead to find where the = is, then collect all identifiers before it
+        loop {
+            self.skip_whitespace_only();
+            
+            match self.current_kind() {
+                // Stop at punctuation that ends field names
+                TokenKind::Equal | TokenKind::Comma | TokenKind::RightBracket => break,
+                
+                TokenKind::Identifier(ref s) => {
+                    let s_clone = s.clone();
+                    // Don't consume type keywords
+                    if self.is_type_keyword(&s_clone) || s_clone == "optional" {
+                        break;
+                    }
+                    // Include this word in the name
+                    name_parts.push(s_clone);
+                    self.advance();
+                }
+                
+                _ => break,
+            }
+        }
+        
+        let full_name = name_parts.join(" ");
+        Ok(Identifier::new(full_name, false, start_span.merge(self.prev_span())))
+    }
+    
+    /// Check if identifier is a type keyword
+    fn is_type_keyword(&self, name: &str) -> bool {
+        matches!(
+            name,
+            "any" | "none" | "null" | "logical" | "number" | "time" |
+            "date" | "datetime" | "datetimezone" | "duration" | "text" |
+            "binary" | "type" | "list" | "record" | "table" | "function" | "nullable"
+        )
     }
     
     /// Parse record expression or field projection
@@ -954,6 +1123,16 @@ impl Parser {
         
         self.skip_trivia();
         self.expect(TokenKind::RightBracket)?;
+        
+        // Check for optional suffix ?
+        self.skip_whitespace_only();
+        let optional = if self.current_kind() == TokenKind::Question {
+            self.advance();
+            true
+        } else {
+            false
+        };
+        
         let end_span = self.prev_span();
         
         // Single field: treat as field access on implicit _
@@ -964,31 +1143,18 @@ impl Parser {
                 ExprKind::FieldAccess(Box::new(FieldAccessExpr {
                     expr: Expr::new(ExprKind::Underscore, start_span),
                     field,
+                    optional,
                 })),
                 start_span.merge(end_span),
             ))
         } else {
-            // Multiple fields - create a record projection
-            // This is simplified; full implementation would be more complex
-            let record_fields: Vec<RecordField> = fields
-                .into_iter()
-                .map(|name| RecordField {
-                    span: name.span,
-                    leading_trivia: Vec::new(),
-                    trailing_trivia: Vec::new(),
-                    value: Expr::new(
-                        ExprKind::FieldAccess(Box::new(FieldAccessExpr {
-                            expr: Expr::new(ExprKind::Underscore, name.span),
-                            field: name.clone(),
-                        })),
-                        name.span,
-                    ),
-                    name,
-                })
-                .collect();
-            
+            // Multiple fields - create a field projection
             Ok(Expr::new(
-                ExprKind::Record(RecordExpr { fields: record_fields }),
+                ExprKind::FieldProjection(Box::new(FieldProjectionExpr {
+                    expr: Expr::new(ExprKind::Underscore, start_span),
+                    fields,
+                    optional,
+                })),
                 start_span.merge(end_span),
             ))
         }

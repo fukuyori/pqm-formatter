@@ -70,6 +70,7 @@ impl Formatter {
             ExprKind::Record(record) => self.format_record(record),
             ExprKind::List(list) => self.format_list(list),
             ExprKind::FieldAccess(access) => self.format_field_access(access),
+            ExprKind::FieldProjection(proj) => self.format_field_projection(proj),
             ExprKind::ItemAccess(access) => self.format_item_access(access),
             ExprKind::Binary(binary) => self.format_binary(binary),
             ExprKind::Unary(unary) => self.format_unary(unary),
@@ -655,6 +656,27 @@ impl Formatter {
         self.write("[");
         self.format_identifier(&access.field);
         self.write("]");
+        if access.optional {
+            self.write("?");
+        }
+    }
+    
+    /// Format field projection
+    fn format_field_projection(&mut self, proj: &FieldProjectionExpr) {
+        self.format_expr(&proj.expr);
+        self.write("[");
+        for (i, field) in proj.fields.iter().enumerate() {
+            if i > 0 {
+                self.write(", ");
+            }
+            self.write("[");
+            self.format_identifier(field);
+            self.write("]");
+        }
+        self.write("]");
+        if proj.optional {
+            self.write("?");
+        }
     }
     
     /// Format item access
@@ -663,6 +685,9 @@ impl Formatter {
         self.write("{");
         self.format_expr(&access.index);
         self.write("}");
+        if access.optional {
+            self.write("?");
+        }
     }
     
     /// Format binary expression
@@ -682,6 +707,14 @@ impl Formatter {
         self.write(" ");
         self.write(binary.operator.as_str());
         self.write(" ");
+        
+        // For 'as' and 'is' operators, format the type annotation directly (without 'type' keyword)
+        if matches!(binary.operator, BinaryOp::As | BinaryOp::Is) {
+            if let ExprKind::Type(type_expr) = &binary.right.kind {
+                self.format_type_annotation(&type_expr.type_annotation);
+                return;
+            }
+        }
         
         if needs_right_parens {
             self.write("(");
@@ -766,8 +799,11 @@ impl Formatter {
                         self.write("optional ");
                     }
                     self.format_identifier(&field.name);
-                    self.write(" = ");
-                    self.format_type_annotation(&field.type_annotation);
+                    // Only output "= type" if the type is not Any (type-less field)
+                    if !matches!(&field.type_annotation.kind, TypeKind::Any) {
+                        self.write(" = ");
+                        self.format_type_annotation(&field.type_annotation);
+                    }
                 }
                 self.write("]");
             }
@@ -781,8 +817,11 @@ impl Formatter {
                         self.write("optional ");
                     }
                     self.format_identifier(&field.name);
-                    self.write(" = ");
-                    self.format_type_annotation(&field.type_annotation);
+                    // Only output "= type" if the type is not Any (type-less field)
+                    if !matches!(&field.type_annotation.kind, TypeKind::Any) {
+                        self.write(" = ");
+                        self.format_type_annotation(&field.type_annotation);
+                    }
                 }
                 self.write("]");
             }

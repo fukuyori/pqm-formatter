@@ -749,3 +749,82 @@ fn test_incomplete_function() {
     let code = "(x) =>";
     assert!(validate(code).is_err());
 }
+
+// ========== New tests for improved parser ==========
+
+#[test]
+
+// ========== New tests for improved parser v0.5 ==========
+
+#[test]
+fn test_field_projection_basic() {
+    let input = "{}[[x], [y]]";
+    let result = format_default(input);
+    assert!(result.is_ok());
+    let formatted = result.unwrap();
+    assert!(formatted.contains("[[x], [y]]"));
+}
+
+#[test]
+fn test_optional_field_selector() {
+    let input = "[x]?";
+    let result = format_default(input);
+    assert!(result.is_ok());
+    let formatted = result.unwrap();
+    assert!(formatted.contains("?"));
+}
+
+#[test]
+fn test_as_nullable_type() {
+    let input = "1 as nullable number";
+    let result = format_default(input);
+    assert!(result.is_ok());
+    let formatted = result.unwrap();
+    assert!(formatted.contains("as nullable number"));
+}
+
+#[test]
+fn test_space_separated_type_field() {
+    let input = "type table [Date accessed = datetimezone]";
+    let result = format_default(input);
+    assert!(result.is_ok());
+    let formatted = result.unwrap();
+    assert!(formatted.contains("Date accessed"));
+}
+
+#[test]
+fn test_typeless_field() {
+    let input = "type table [key, bar]";
+    let result = format_default(input);
+    assert!(result.is_ok());
+    let formatted = result.unwrap();
+    // Should not have "= any" for type-less fields
+    assert!(!formatted.contains("= any"));
+}
+
+#[test]
+fn test_recursive_function_call() {
+    let input = "@foo(1, 2)";
+    let result = format_default(input);
+    assert!(result.is_ok());
+    let formatted = result.unwrap();
+    assert!(formatted.contains("@foo"));
+}
+
+#[test]
+fn test_field_projection_optional() {
+    let input = "{}[[x], [y]]?";
+    let result = format_default(input);
+    assert!(result.is_ok());
+    let formatted = result.unwrap();
+    assert!(formatted.contains("]]?"));
+}
+
+#[test]
+fn test_item_access_optional() {
+    let input = "{1, 2, 3}{0}?";
+    let result = format_default(input);
+    assert!(result.is_ok());
+    let formatted = result.unwrap();
+    assert!(formatted.contains("{0}?"));
+}

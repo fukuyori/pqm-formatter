@@ -481,7 +481,8 @@ impl<'a> Lexer<'a> {
                 TokenKind::DotDot
             }
         } else {
-            TokenKind::Invalid(".".to_string())
+            // Single dot - valid for member access
+            TokenKind::Dot
         }
     }
     
